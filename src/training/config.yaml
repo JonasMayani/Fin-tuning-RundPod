@@ -147,8 +147,8 @@ curriculum:
 # the translation pipeline (no training happening simultaneously).
 translation:
   model_name:  "facebook/nllb-200-1.3B"
-  num_beams:   4
-  batch_size:  32              # A40 48GB can handle large translation batches
+  num_beams:   2
+  batch_size:  128              # A40 48GB can handle large translation batches
   max_length:  384
 
 # ── Augmentation ──────────────────────────────────────────────────────────────
