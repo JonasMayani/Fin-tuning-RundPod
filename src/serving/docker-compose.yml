@@ -1,0 +1,110 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.yml
+# Multilingual African Health Assistant — Full Stack
+# Phase 5.4 — Deployment Configuration
+#
+# Services:
+#   api        — FastAPI inference server
+#   prometheus — Metrics scraping
+#   grafana    — Monitoring dashboard
+#   nginx      — Reverse proxy + rate limiting
+#
+# Usage:
+#   docker-compose up -d
+#   docker-compose logs -f api
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+volumes:
+  model_data:
+  prometheus_data:
+  grafana_data:
+  logs_data:
+
+networks:
+  health_net:
+    driver: bridge
+
+services:
+
+  # ── FastAPI Inference API ─────────────────────────────────────────────────
+  api:
+    build:
+      context: ../..
+      dockerfile: src/serving/Dockerfile
+    container_name: health_api
+    restart: unless-stopped
+    volumes:
+      - model_data:/app/models
+      - logs_data:/app/logs
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=info
+    ports:
+      - "8000:8000"
+    networks:
+      - health_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+        reservations:
+          memory: 8G
+
+  # ── NGINX Reverse Proxy ───────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: health_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - api
+    networks:
+      - health_net
+
+  # ── Prometheus Metrics ────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: health_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+    ports:
+      - "9090:9090"
+    networks:
+      - health_net
+
+  # ── Grafana Dashboard ─────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: health_grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-changeme}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana_dashboards:/etc/grafana/provisioning/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - health_net

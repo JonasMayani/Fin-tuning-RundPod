@@ -1,0 +1,109 @@
+# =============================================================================
+# config.yaml — mt5-base | RTX 4060 Laptop GPU (8 GB VRAM) | bf16
+# =============================================================================
+#
+# Memory budget (bf16, no quantisation):
+#   mt5-base weights        ~1.1 GB  (bf16)
+#   LoRA adapters           ~0.02 GB (bf16, q+v only)
+#   Optimizer (adamw_torch) ~2.2 GB  (fp32 master weights)
+#   Activations + grads     ~1.5 GB  (gradient_checkpointing=true, batch=4)
+#   ──────────────────────────────────
+#   Total estimate          ~4.8 GB  ← comfortable on 8 GB
+#
+# Effective batch = per_device_train_batch(4) x gradient_accumulation(8) = 32
+#
+# OOM ladder — reduce in this order if you hit out-of-memory:
+#   1. per_device_train_batch: 4 → 2
+#   2. max_input_length / max_output_length: 256 → 128
+#   3. lora r: 16 → 8
+# =============================================================================
+
+seed: 42
+deterministic: true
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+paths:
+  data_raw:       "data/raw"
+  data_augmented: "data/augmented"
+  data_cleaned:   "data/cleaned"
+  models:         "models/checkpoints"
+  logs:           "logs"
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+model:
+  base_model:        "bigscience/mt0-base"
+  max_input_length:  256
+  max_output_length: 256
+  load_in_8bit:      false            # not needed for mt0-base in bf16
+
+# ── LoRA / PEFT ───────────────────────────────────────────────────────────────
+lora:
+  enabled:        true
+  r:              16
+  lora_alpha:     32
+  lora_dropout:   0.05
+  target_modules: ["q", "v"]         # ~0.3% trainable params
+  bias:           "none"
+  task_type:      "SEQ_2_SEQ_LM"
+
+# ── Optimiser ─────────────────────────────────────────────────────────────────
+optimiser:
+  type:            "adamw_torch"      # native PyTorch — no bitsandbytes needed
+  lr:              3.0e-4
+  weight_decay:    0.01
+  lr_scheduler:    "cosine"
+  warmup_ratio:    0.03
+  label_smoothing: 0.0
+  max_grad_norm:   0.5
+
+# ── Training loop ─────────────────────────────────────────────────────────────
+training:
+  epochs:                  10
+  early_stopping_patience: 4
+
+  per_device_train_batch:  4
+  per_device_eval_batch:   4
+  gradient_accumulation:   16         # effective batch = 4 x 16 = 64
+
+  # bf16: better than fp16 on RTX 4060 (Ada Lovelace native bf16 tensor cores)
+  #   - same dynamic range as fp32 → no NaN/overflow risk
+  #   - no loss scaler needed
+  #   - matches mt5 original training precision
+  mixed_precision:         "bf16"
+
+  gradient_checkpointing:  true
+
+  # Windows + Python 3.12+: must be 0
+  # spawn multiprocessing cannot pickle the enable_input_require_grads closure
+  dataloader_num_workers:  0
+
+  logging_steps:           50
+
+  # Phase 1: saves by steps (frequent, crash-safe, no eval)
+  # Phase 2: train.py auto-switches save_strategy to "epoch" to match eval
+  save_strategy:           "steps"
+  save_steps:              200
+  save_total_limit:        3
+
+  eval_strategy:           "epoch"
+  predict_with_generate:   true
+  generation_num_beams:    1
+
+  load_best_model_at_end:  true
+  metric_for_best_model:   "rougeL"
+  greater_is_better:       true
+
+  resume_from_checkpoint:  "auto"
+
+# ── Curriculum learning ───────────────────────────────────────────────────────
+curriculum:
+  enabled:        true
+  phase1_epochs:  3
+  phase2_epochs:  7
+  phase1_langs:   ["Eng_Uga", "Aka_Gha", "Eng_Gha"]
+
+# ── Experiment tracking ───────────────────────────────────────────────────────
+tracking:
+  backend:    "none"
+  experiment: "african-health-qa"
+  run_name:   "mt0-base-rtx4060-bf16-lora"

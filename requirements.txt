@@ -1,0 +1,65 @@
+# ─── Core ML / NLP ───────────────────────────────────────────────────────────
+# torch>=2.1.0
+transformers>=4.40.0
+accelerate>=0.29.0
+peft>=0.10.0          # LoRA / parameter-efficient fine-tuning
+datasets>=2.18.0
+tokenizers>=0.15.2
+sentencepiece>=0.2.0  # required by mT5 / NLLB tokenisers
+protobuf>=3.20.0
+
+# ─── Translation & Language ID ────────────────────────────────────────────────
+sacrebleu>=2.4.0      # chrF score computation
+lingua-language-detector>=2.0.0
+langdetect>=1.0.9
+
+# ─── Evaluation Metrics ───────────────────────────────────────────────────────
+rouge-score>=0.1.2
+nltk>=3.8.1
+bert-score>=0.3.13
+
+# ─── Quantisation / Export ────────────────────────────────────────────────────
+optimum>=1.19.0
+# auto-gptq>=0.7.1
+onnxruntime>=1.17.1
+
+# ─── Data Processing ──────────────────────────────────────────────────────────
+pandas>=2.2.0
+numpy>=1.26.0
+scipy>=1.13.0
+scikit-learn>=1.4.0
+sentence-transformers>=2.7.0  # multilingual-e5-base embeddings
+
+# ─── Data Quality & Safety ────────────────────────────────────────────────────
+detoxify>=0.5.2
+ftfy>=6.2.0           # Unicode normalisation / text fixing
+
+# ─── Serving ──────────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.7.0
+slowapi>=0.1.9        # rate limiting for FastAPI
+httpx>=0.27.0
+python-multipart>=0.0.9
+
+# ─── Experiment Tracking ──────────────────────────────────────────────────────
+mlflow>=2.12.0
+wandb>=0.17.0
+
+# ─── Notebook & Visualisation ────────────────────────────────────────────────
+jupyter>=1.0.0
+ipykernel>=6.29.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+plotly>=5.21.0
+ydata-profiling>=4.7.0   # EDA report generation (pandas-profiling successor)
+
+# ─── DevOps / Utilities ──────────────────────────────────────────────────────
+python-dotenv>=1.0.1
+pyyaml>=6.0.1
+tqdm>=4.66.2
+loguru>=0.7.2
+click>=8.1.7
+pytest>=8.1.0
+pytest-asyncio>=0.23.0
+krippendorff>=0.6.0   # inter-annotator agreement
