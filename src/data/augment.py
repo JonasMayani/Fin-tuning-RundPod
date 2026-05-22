@@ -184,8 +184,8 @@ def translate_batch(
     src_lang: str,
     tgt_lang: str,
     model_name: str,
-    num_beams: int = 2,
-    batch_size: int = 128,
+    num_beams: int = 3,
+    batch_size: int = 256,
     max_length: int = 384,
     desc: str = "",
 ) -> list[str]:
@@ -240,8 +240,8 @@ def translate_batch(
 
 def paraphrase_batch(
     texts: list[str],
-    batch_size: int = 32,
-    max_length: int = 256,
+    batch_size: int = 128,
+    max_length: int = 384,
 ) -> list[str]:
     """
     Paraphrase a list of English texts using T5.
@@ -250,7 +250,7 @@ def paraphrase_batch(
     to English. Paraphrasing before translating back creates more diverse
     training examples than direct round-trip translation.
 
-    Batched for efficiency — on A40 batch_size=32 keeps GPU busy without
+    Batched for efficiency — on A40 batch_size=64 keeps GPU busy without
     exceeding memory when NLLB is also loaded.
 
     Args:

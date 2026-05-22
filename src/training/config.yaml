@@ -1,160 +1,102 @@
-# =============================================================================
-# config.yaml — mt5-large | RunPod A40 (48 GB VRAM, 50 GB RAM, 9 vCPU)
-# =============================================================================
-#
-# Memory budget (bf16, NO quantisation — A40 has plenty of VRAM):
-#   mt5-large weights (bf16)    ~2.4  GB
-#   LoRA adapters (r=16)        ~0.1  GB
-#   adamw_torch optimizer       ~4.8  GB  (fp32 master weights)
-#   Activations (batch=16,s=256)~6.0  GB  (gradient_checkpointing=true)
-#   Gradients                   ~2.4  GB
-#   ─────────────────────────────────────
-#   Total estimate              ~15.7 GB  ← very comfortable on 48 GB A40
-#
-# Effective batch = per_device_train_batch(16) x gradient_accumulation(4) = 64
-#
-# Translation uses nllb-200-1.3B for best quality on A40.
-# =============================================================================
-
 seed: 42
 deterministic: true
-
-# ── Paths (RunPod) ─────────────────────────────────────────────────────────────
 paths:
-  data_raw:       "/workspace/Fin-tuning-RundPod/data/raw"
-  data_cleaned:   "/workspace/Fin-tuning-RundPod/data/cleaned"
-  data_augmented: "/workspace/Fin-tuning-RundPod/data/augmented"
-  data_external:  "/workspace/Fin-tuning-RundPod/data/external"
-  models:         "/workspace/Fin-tuning-RundPod/src/models/checkpoints"
-  submissions:    "/workspace/Fin-tuning-RundPod/src/submissions"
-  reports:        "/workspace/Fin-tuning-RundPod/src/reports"
-  logs:           "/workspace/Fin-tuning-RundPod/src/logs"
-
-# ── Dataset ───────────────────────────────────────────────────────────────────
+  data_raw: /workspace/Fin-tuning-RundPod/data/raw
+  data_cleaned: /workspace/Fin-tuning-RundPod/data/cleaned
+  data_augmented: /workspace/Fin-tuning-RundPod/data/augmented
+  data_external: /workspace/Fin-tuning-RundPod/data/external
+  models: /workspace/Fin-tuning-RundPod/src/models/checkpoints
+  submissions: /workspace/Fin-tuning-RundPod/src/submissions
+  reports: /workspace/Fin-tuning-RundPod/src/reports
+  logs: /workspace/Fin-tuning-RundPod/src/logs
 dataset:
-  train_file:  "data/augmented/final_train.csv"
-  val_file:    "data/cleaned/val_clean.csv"
-  test_file:   "data/raw/Test.csv"
-  id_col:      "ID"
-  input_col:   "input"
-  output_col:  "output"
-  subset_col:  "subset"
+  train_file: data/augmented/final_train.csv
+  val_file: data/cleaned/val_clean.csv
+  test_file: data/raw/Test.csv
+  id_col: ID
+  input_col: input
+  output_col: output
+  subset_col: subset
   languages:
-    - Eng_Uga    # English — Uganda
-    - Aka_Gha    # Akan (Twi) — Ghana
-    - Eng_Gha    # English — Ghana
-    - Eng_Eth    # English — Ethiopia
-    - Lug_Uga    # Luganda — Uganda
-    - Eng_Ken    # English — Kenya
-    - Swa_Ken    # Swahili — Kenya
-    - Amh_Eth    # Amharic — Ethiopia
-
-# ── Language → NLLB BCP-47 Mapping ───────────────────────────────────────────
-# Used by augment.py for translation source/target language codes.
-# English subsets all map to eng_Latn — the augmenter uses this to
-# skip English→English translation automatically.
+  - Eng_Uga
+  - Aka_Gha
+  - Eng_Gha
+  - Eng_Eth
+  - Lug_Uga
+  - Eng_Ken
+  - Swa_Ken
+  - Amh_Eth
 nllb_codes:
-  Eng_Uga: "eng_Latn"
-  Aka_Gha: "aka_Latn"
-  Eng_Gha: "eng_Latn"
-  Eng_Eth: "eng_Latn"
-  Lug_Uga: "lug_Latn"
-  Eng_Ken: "eng_Latn"
-  Swa_Ken: "swh_Latn"
-  Amh_Eth: "amh_Ethi"
-
-# ── Model ─────────────────────────────────────────────────────────────────────
+  Eng_Uga: eng_Latn
+  Aka_Gha: aka_Latn
+  Eng_Gha: eng_Latn
+  Eng_Eth: eng_Latn
+  Lug_Uga: lug_Latn
+  Eng_Ken: eng_Latn
+  Swa_Ken: swh_Latn
+  Amh_Eth: amh_Ethi
 model:
-  base_model:        "google/mt5-large"
-  max_input_length:  256
+  base_model: google/mt5-large
+  max_input_length: 256
   max_output_length: 256
-  load_in_8bit:      false    # NOT needed — A40 has 48 GB, bf16 fits easily
-
-# ── LoRA / PEFT ───────────────────────────────────────────────────────────────
-# More target modules than laptop config — A40 has VRAM headroom for them.
+  load_in_8bit: false
 lora:
-  enabled:        true
-  r:              16
-  lora_alpha:     32
-  lora_dropout:   0.05
-  target_modules: ["q", "v", "wi_0", "wi_1"]   # ~0.6% trainable params
-  bias:           "none"
-  task_type:      "SEQ_2_SEQ_LM"
-
-# ── Optimiser ─────────────────────────────────────────────────────────────────
-# adamw_torch — native PyTorch, no bitsandbytes needed on A40
-# lr: 3e-5 — correct for fine-tuning (previous runs at 1e-4+ caused plateau)
+  enabled: true
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules:
+  - q
+  - v
+  - wi_0
+  - wi_1
+  bias: none
+  task_type: SEQ_2_SEQ_LM
 optimiser:
-  type:            "adamw_torch"
-  lr:              3.0e-5       # KEY: 10x lower than previous broken runs
-  weight_decay:    0.01
-  lr_scheduler:    "cosine"
-  warmup_ratio:    0.03         # short warmup — LR already conservative
-  label_smoothing: 0.0          # 0.0 avoids inflated train loss display
-  max_grad_norm:   1.0
-
-# ── Training loop (A40 48 GB) ─────────────────────────────────────────────────
-#
-# A40 memory allows much larger batches than T4/laptop:
-#   batch=16, grad_accum=4 → effective batch = 64 (2× the previous 32)
-#   This gives more stable gradient estimates and faster convergence.
-#
-# A40 is Ampere → bf16 tensor cores are native and faster than fp16.
-# No quantisation overhead → pure bf16 training is cleanest.
-#
+  type: adamw_torch
+  lr: 3.0e-05
+  weight_decay: 0.01
+  lr_scheduler: cosine
+  warmup_ratio: 0.03
+  label_smoothing: 0.0
+  max_grad_norm: 1.0
 training:
-  epochs:                  10
+  epochs: 10
   early_stopping_patience: 3
-
-  per_device_train_batch:  16       # A40 can handle this easily
-  per_device_eval_batch:   32       # inference-only, even larger batch ok
-  gradient_accumulation:   4        # effective batch = 16 x 4 = 64
-
-  mixed_precision:         "bf16"   # A40 Ampere: native bf16 tensor cores
-  gradient_checkpointing:  false    # A40 has enough VRAM — disable for speed
-
-  # RunPod Linux: fork multiprocessing works fine, use multiple workers
-  dataloader_num_workers:  4
+  per_device_train_batch: 64
+  per_device_eval_batch: 128
+  gradient_accumulation: 1
+  mixed_precision: bf16
+  gradient_checkpointing: false
+  dataloader_num_workers: 8
   dataloader_prefetch_factor: 2
-
-  logging_steps:           50
-
-  # Phase 1: save by steps (crash-safe, no eval)
-  # Phase 2: train.py auto-aligns save_strategy with eval_strategy
-  save_strategy:           "steps"
-  save_steps:              500      # less frequent saves = less IO overhead
-  save_total_limit:        3
-
-  eval_strategy:           "epoch"
-  predict_with_generate:   true
-  generation_num_beams:    1        # greedy during training; 4 for final eval
-
-  load_best_model_at_end:  true
-  metric_for_best_model:   "rougeL"
-  greater_is_better:       true
-
-  resume_from_checkpoint:  "auto"
-
-# ── Curriculum learning ───────────────────────────────────────────────────────
+  logging_steps: 50
+  save_strategy: steps
+  save_steps: 500
+  save_total_limit: 3
+  eval_strategy: epoch
+  predict_with_generate: true
+  generation_num_beams: 1
+  load_best_model_at_end: true
+  metric_for_best_model: rougeL
+  greater_is_better: true
+  resume_from_checkpoint: auto
 curriculum:
-  enabled:        true
-  phase1_epochs:  2            # English subset warm-up (faster on A40)
-  phase2_epochs:  8            # all languages
-  phase1_langs:   ["Eng_Uga", "Aka_Gha", "Eng_Gha"]
-
-# ── Translation (augment.py) ──────────────────────────────────────────────────
-# nllb-200-1.3B: higher quality than distilled-600M, fits on A40 alongside
-# the translation pipeline (no training happening simultaneously).
+  enabled: true
+  phase1_epochs: 2
+  phase2_epochs: 8
+  phase1_langs:
+  - Eng_Uga
+  - Aka_Gha
+  - Eng_Gha
 translation:
-  model_name:  "facebook/nllb-200-1.3B"
-  num_beams:   2
-  batch_size:  128              # A40 48GB can handle large translation batches
-  max_length:  384
-
-# ── Augmentation ──────────────────────────────────────────────────────────────
+  model_name: facebook/nllb-200-1.3B
+  num_beams: 2
+  batch_size: 256
+  max_length: 384
 augmentation:
   target_ratio:
-    Eng_Uga: 1.0    # 7,624 rows — largest, no boost
+    Eng_Uga: 1.0
     Aka_Gha: 1.7
     Eng_Gha: 1.7
     Eng_Eth: 2.0
@@ -162,69 +104,68 @@ augmentation:
     Eng_Ken: 3.0
     Swa_Ken: 3.0
     Amh_Eth: 4.0
-  chrf_threshold:          0.35
-  semantic_cos_threshold:  0.30
-  length_ratio_min:        0.5
-  length_ratio_max:        20.0
-
-# ── Temperature Sampling ──────────────────────────────────────────────────────
+  chrf_threshold: 0.35
+  semantic_cos_threshold: 0.3
+  length_ratio_min: 0.5
+  length_ratio_max: 20.0
 temperature_sampling:
-  enabled:     true
+  enabled: true
   temperature: 5.0
-
-# ── Decoding (inference) ──────────────────────────────────────────────────────
 decoding:
   default:
-    num_beams:        8
-    length_penalty:   0.8
-    no_repeat_ngram:  3
-    min_length:       10
+    num_beams: 8
+    length_penalty: 0.8
+    no_repeat_ngram: 3
+    min_length: 10
   per_language:
     Aka_Gha:
-      num_beams:       6
-      length_penalty:  1.0
+      num_beams: 6
+      length_penalty: 1.0
       no_repeat_ngram: 3
     Amh_Eth:
-      num_beams:       8
-      length_penalty:  0.8
+      num_beams: 8
+      length_penalty: 0.8
       no_repeat_ngram: 2
     Lug_Uga:
-      num_beams:       6
-      length_penalty:  1.0
+      num_beams: 6
+      length_penalty: 1.0
       no_repeat_ngram: 3
     Swa_Ken:
-      num_beams:       8
-      length_penalty:  0.8
+      num_beams: 8
+      length_penalty: 0.8
       no_repeat_ngram: 3
     Eng_Uga:
-      num_beams:       8
-      length_penalty:  0.6
+      num_beams: 8
+      length_penalty: 0.6
       no_repeat_ngram: 4
-
-# ── Evaluation ────────────────────────────────────────────────────────────────
 evaluation:
-  rouge_types: ["rouge1", "rougeL"]
+  rouge_types:
+  - rouge1
+  - rougeL
   metric_weights:
     rouge1_f1: 0.37
     rougeL_f1: 0.37
     llm_judge: 0.26
-
-# ── Experiment tracking ───────────────────────────────────────────────────────
 tracking:
-  backend:    "none"
-  experiment: "african-health-qa"
-  run_name:   "mt5-large-a40-bf16-lora-lr3e5"
-
-# ── Serving ───────────────────────────────────────────────────────────────────
+  backend: none
+  experiment: african-health-qa
+  run_name: mt5-large-a40-bf16-lora-lr3e5
 serving:
-  host:  "0.0.0.0"
-  port:  8000
+  host: 0.0.0.0
+  port: 8000
   disclaimer:
-    Eng_Uga: "This answer is for informational purposes only. Please consult a qualified health professional."
-    Eng_Gha: "This answer is for informational purposes only. Please consult a qualified health professional."
-    Eng_Eth: "This answer is for informational purposes only. Please consult a qualified health professional."
-    Eng_Ken: "This answer is for informational purposes only. Please consult a qualified health professional."
-    Aka_Gha: "Nsɛm yi yɛ nsɛm a wɔde ho kɔ adwene mu nko ara. Fa wo ho kɔ onyansafo okra ho adwene."
-    Amh_Eth: "ይህ መልስ ለመረጃ ዓላማ ብቻ ነው። እባክዎ ለሕክምና ምክር ብቁ ጤና ባለሙያ ያነጋግሩ።"
-    Lug_Uga: "Okuddamu kuno kwe kulaga amawulire bukabu. Ndowooza ogende gy'omudaala omanyi."
-    Swa_Ken: "Jibu hili ni kwa madhumuni ya habari tu. Tafadhali wasiliana na mtaalamu wa afya."
+    Eng_Uga: This answer is for informational purposes only. Please consult a qualified
+      health professional.
+    Eng_Gha: This answer is for informational purposes only. Please consult a qualified
+      health professional.
+    Eng_Eth: This answer is for informational purposes only. Please consult a qualified
+      health professional.
+    Eng_Ken: This answer is for informational purposes only. Please consult a qualified
+      health professional.
+    Aka_Gha: Nsɛm yi yɛ nsɛm a wɔde ho kɔ adwene mu nko ara. Fa wo ho kɔ onyansafo
+      okra ho adwene.
+    Amh_Eth: ይህ መልስ ለመረጃ ዓላማ ብቻ ነው። እባክዎ ለሕክምና ምክር ብቁ ጤና ባለሙያ ያነጋግሩ።
+    Lug_Uga: Okuddamu kuno kwe kulaga amawulire bukabu. Ndowooza ogende gy'omudaala
+      omanyi.
+    Swa_Ken: Jibu hili ni kwa madhumuni ya habari tu. Tafadhali wasiliana na mtaalamu
+      wa afya.
