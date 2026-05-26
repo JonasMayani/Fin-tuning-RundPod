@@ -1,0 +1,16 @@
+# Additional dependencies for the augmentation pipeline.
+# Install with: pip install -r requirements-pipeline.txt
+# This is on TOP of requirements.txt (your training environment).
+
+# Multilingual sentence embeddings — for Q↔A similarity and dedup
+sentence-transformers==3.2.1
+
+# fastText language identification (lid.176 model)
+# fasttext-wheel is the pre-built wheel that works on Linux without compilation
+fasttext-wheel==0.9.2
+
+# Progress bars
+tqdm>=4.66.0
+
+# Anthropic API (optional — only if --backend claude is used)
+# anthropic>=0.39.0

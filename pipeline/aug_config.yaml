@@ -1,0 +1,43 @@
+# aug_config.yaml — controls Stages 2/3/4 augmentation volume per language.
+#
+# Logic based on rouge_by_language.csv from your first eval:
+#   Amh_Eth (0.036): catastrophic — bulk cross-lingual transfer from English
+#   Lug_Uga (0.115): data scarcity — back-translation + cross-lingual
+#   Eng_Uga (0.123): label noise — clean aggressively + LLM paraphrase clean rows
+#   Eng_Ken (0.139): label noise — same as Eng_Uga
+#   Swa_Ken (0.124): noisy — back-translate the clean subset
+#   Eng_Eth (0.168): moderate — LLM paraphrase
+#   Aka_Gha (0.205): decent — light augmentation
+#   Eng_Gha (0.246): best — use as seed for cross-lingual
+
+# Stage 2: back-translation targets (paraphrase question, keep answer)
+# Higher for languages with paraphrase-poor surface forms in training.
+backtranslation_targets:
+  Eng_Uga: 0        # English back-translation has limited value
+  Eng_Gha: 0
+  Eng_Eth: 0
+  Eng_Ken: 0
+  Aka_Gha: 800
+  Lug_Uga: 1200
+  Swa_Ken: 1000
+  Amh_Eth: 600
+
+# Stage 3: cross-lingual transfer (translate clean English → target language)
+# Heavily biased toward the languages that were broken/scarce in your eval.
+crosslingual_targets:
+  Amh_Eth: 1500     # 462 rows → ~2000 total: biggest absolute volume boost
+  Lug_Uga: 1000     # 842 rows → ~1842 total
+  Swa_Ken:  800     # 511 rows → ~1311 total
+  Aka_Gha:  500     # 1084 rows → ~1584 total
+
+# Stage 4: LLM paraphrase (rewrite answer in same language)
+# This adds the lexical diversity that helps ROUGE F1.
+paraphrase_targets:
+  Eng_Uga: 800      # 1674 rows of probably-noisy data → add high-quality variations
+  Eng_Gha: 500
+  Eng_Eth: 400
+  Eng_Ken: 500
+  Aka_Gha: 400
+  Lug_Uga: 400
+  Swa_Ken: 500
+  Amh_Eth: 300

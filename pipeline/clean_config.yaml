@@ -1,0 +1,31 @@
+# clean_config.yaml — controls Stage 1 cleaning thresholds.
+#
+# These defaults reflect what we learned from your rouge_by_language.csv:
+#   - Amh_Eth scored 0.036 (broken) → enforce script AND langid strictly
+#   - English subsets scored low → enforce coherence threshold strictly
+#   - African-language subsets → more lenient on langid (fastText unreliable)
+
+min_q_tokens: 3
+min_a_tokens: 5
+max_a_tokens: 400
+max_repetition_ratio: 0.4
+near_dup_threshold: 0.85
+
+per_language:
+  # Most aggressive: Amharic had near-zero ROUGE; many rows likely in wrong script
+  Amh_Eth:
+    qa_cos_min: 0.30           # demand stronger Q↔A coherence
+    require_script_ok: true    # must be in Ethiopic script
+    require_lang_ok: true      # fastText confirms 'am'
+
+  # English partitions scored unexpectedly low → enforce coherence strictly
+  Eng_Uga: { qa_cos_min: 0.50, require_script_ok: true, require_lang_ok: true }
+  Eng_Ken: { qa_cos_min: 0.50, require_script_ok: true, require_lang_ok: true }
+  Eng_Gha: { qa_cos_min: 0.45, require_script_ok: true, require_lang_ok: true }
+  Eng_Eth: { qa_cos_min: 0.45, require_script_ok: true, require_lang_ok: true }
+
+  # African languages with smaller datasets: lenient to avoid losing data,
+  # but still drop the worst Q↔A mismatches.
+  Aka_Gha: { qa_cos_min: 0.30, require_script_ok: true,  require_lang_ok: false }
+  Lug_Uga: { qa_cos_min: 0.30, require_script_ok: true,  require_lang_ok: false }
+  Swa_Ken: { qa_cos_min: 0.35, require_script_ok: true,  require_lang_ok: true }
