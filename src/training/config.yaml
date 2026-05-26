@@ -171,6 +171,7 @@ translation:
 augmentation:
   target_ratio:
     Eng_Uga: 1.0
+    Eng_Uga: 1.0
     Aka_Gha: 1.7
     Eng_Gha: 1.7
     Eng_Eth: 2.0
@@ -206,6 +207,7 @@ quality_gate:
 
 temperature_sampling:
   enabled: true
+  enabled: true
   temperature: 5.0
 
 # ─── Decoding (final-eval / submission) ────────────────────────────────────
@@ -220,20 +222,30 @@ decoding:
     Aka_Gha:
       num_beams: 6
       length_penalty: 1.0
+      num_beams: 6
+      length_penalty: 1.0
       no_repeat_ngram: 3
     Amh_Eth:
+      num_beams: 8
+      length_penalty: 0.8
       num_beams: 8
       length_penalty: 0.8
       no_repeat_ngram: 2
     Lug_Uga:
       num_beams: 6
       length_penalty: 1.0
+      num_beams: 6
+      length_penalty: 1.0
       no_repeat_ngram: 3
     Swa_Ken:
       num_beams: 8
       length_penalty: 0.8
+      num_beams: 8
+      length_penalty: 0.8
       no_repeat_ngram: 3
     Eng_Uga:
+      num_beams: 8
+      length_penalty: 0.6
       num_beams: 8
       length_penalty: 0.6
       no_repeat_ngram: 4
@@ -257,6 +269,8 @@ tracking:
   run_name: mt0-xl-a100-80gb-bf16-lora-v1
 
 serving:
+  host: 0.0.0.0
+  port: 8000
   host: 0.0.0.0
   port: 8000
   disclaimer:

@@ -158,20 +158,28 @@ def _normalize_texts(texts: list) -> list[str]:
 
 def compute_chrf(hypotheses: list[str], references: list[str]) -> list[float]:
     """
-    Compute sentence-level chrF scores (0–1) between hypothesis and reference lists.
-    chrF measures character n-gram overlap — language-agnostic, works for all scripts.
-
-    Falls back to 1.0 (pass everything) if sacrebleu is not installed.
+    Compute sentence-level chrF scores (0–1).
+    Ensures all inputs are clean strings before scoring.
     """
     try:
         from sacrebleu.metrics import CHRF
         chrf_metric = CHRF()
-        return [
-            chrf_metric.sentence_score(h, [r]).score / 100.0
-            for h, r in zip(hypotheses, references)
-        ]
+        scores = []
+        for h, r in zip(hypotheses, references):
+            # Convert to string and strip — prevents TypeError from None/float/NaN
+            h_clean = str(h).strip() if h is not None else ""
+            r_clean = str(r).strip() if r is not None else ""
+            if not h_clean or not r_clean:
+                scores.append(0.0)
+                continue
+            try:
+                score = chrf_metric.sentence_score(h_clean, [r_clean]).score / 100.0
+            except Exception:
+                score = 0.0
+            scores.append(score)
+        return scores
     except ImportError:
-        logger.warning("sacrebleu not installed — skipping chrF filter (pip install sacrebleu)")
+        logger.warning("sacrebleu not installed — skipping chrF filter")
         return [1.0] * len(hypotheses)
 
 
@@ -185,10 +193,15 @@ def translate_batch(
     tgt_lang: str,
     model_name: str,
     num_beams: int = 2,
-    batch_size: int = 128,
+    batch_size: int = 256,
     max_length: int = 384,
     desc: str = "",
 ) -> list[str]:
+    """
+    Translate with automatic batch size reduction on OOM.
+    If a batch causes OOM, splits it in half and retries.
+    Guarantees completion regardless of sequence length variance.
+    """
     if src_lang == ENGLISH_NLLB and tgt_lang == ENGLISH_NLLB:
         logger.warning("eng→eng skipped")
         return _normalize_texts(texts)
@@ -200,37 +213,56 @@ def translate_batch(
     label = desc or f"{src_lang}→{tgt_lang}"
     translations: list[str] = []
 
-    for i in tqdm(range(0, len(texts), batch_size), desc=label):
-        chunk = texts[i : i + batch_size]
+    i = 0
+    current_batch_size = batch_size
+    pbar = tqdm(total=len(texts), desc=label)
 
-        inputs = tokenizer(
-            chunk,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=max_length,
-            pad_to_multiple_of=8,
-        )
-        inputs = {k: v.cuda() for k, v in inputs.items()}
+    while i < len(texts):
+        chunk = texts[i : i + current_batch_size]
 
-        with torch.no_grad():
-            output_ids = model.generate(
-                **inputs,
-                forced_bos_token_id=forced_bos,
-                num_beams=num_beams,
-                max_new_tokens=max_length,
-                do_sample=False,
+        try:
+            inputs = tokenizer(
+                chunk,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_length,
+                pad_to_multiple_of=8,
             )
+            inputs = {k: v.cuda() for k, v in inputs.items()}
 
-        decoded = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
-        translations.extend(decoded)
+            with torch.no_grad():
+                output_ids = model.generate(
+                    **inputs,
+                    forced_bos_token_id=forced_bos,
+                    num_beams=num_beams,
+                    max_new_tokens=max_length,
+                    do_sample=False,
+                )
 
-        # ── NO torch.cuda.empty_cache() here ─────────────────────────────────
-        # PyTorch reuses freed tensor memory automatically via its caching
-        # allocator. Calling empty_cache() forces a full CUDA sync which adds
-        # ~5s per batch. Remove it and let PyTorch manage memory naturally.
-        del inputs, output_ids   # release Python references only
+            decoded = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
+            translations.extend(decoded)
+            del inputs, output_ids
 
+            pbar.update(len(chunk))
+            i += current_batch_size
+
+            # Gradually restore batch size after successful batches
+            if current_batch_size < batch_size:
+                current_batch_size = min(current_batch_size * 2, batch_size)
+
+        except torch.cuda.OutOfMemoryError:
+            # OOM — halve the batch size and retry
+            del inputs
+            torch.cuda.empty_cache()
+            new_size = max(1, current_batch_size // 2)
+            logger.warning(
+                f"OOM at batch={current_batch_size} — "
+                f"reducing to {new_size} and retrying"
+            )
+            current_batch_size = new_size
+
+    pbar.close()
     return translations
 
 
@@ -240,8 +272,8 @@ def translate_batch(
 
 def paraphrase_batch(
     texts: list[str],
-    batch_size: int = 32,
-    max_length: int = 256,
+    batch_size: int = 128,
+    max_length: int = 384,
 ) -> list[str]:
     """
     Paraphrase a list of English texts using T5.
@@ -250,7 +282,7 @@ def paraphrase_batch(
     to English. Paraphrasing before translating back creates more diverse
     training examples than direct round-trip translation.
 
-    Batched for efficiency — on A40 batch_size=32 keeps GPU busy without
+    Batched for efficiency — on A40 batch_size=64 keeps GPU busy without
     exceeding memory when NLLB is also loaded.
 
     Args:
@@ -371,10 +403,11 @@ def forward_translate(
             num_beams, batch_size, max_length,
             desc=f"Fwd inputs  [{subset_tag}]",
         )
+        output_batch_size = max(16, batch_size // 4)  # 64→16
         translated_outputs = translate_batch(
             outputs_en, ENGLISH_NLLB, tgt_lang, model_name,
-            num_beams, batch_size, max_length,
-            desc=f"Fwd outputs [{subset_tag}]",
+            num_beams, output_batch_size, max_length,
+            desc=f"Fwd outputs [{subset_tag}]"
         )
 
         # Quality filter: chrF of translated input vs original English input
