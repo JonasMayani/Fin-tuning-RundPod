@@ -1,43 +1,57 @@
-# aug_config.yaml — controls Stages 2/3/4 augmentation volume per language.
+# aug_config_v2.yaml — conservative augmentation focused on weak languages only.
 #
-# Logic based on rouge_by_language.csv from your first eval:
-#   Amh_Eth (0.036): catastrophic — bulk cross-lingual transfer from English
-#   Lug_Uga (0.115): data scarcity — back-translation + cross-lingual
-#   Eng_Uga (0.123): label noise — clean aggressively + LLM paraphrase clean rows
-#   Eng_Ken (0.139): label noise — same as Eng_Uga
-#   Swa_Ken (0.124): noisy — back-translate the clean subset
-#   Eng_Eth (0.168): moderate — LLM paraphrase
-#   Aka_Gha (0.205): decent — light augmentation
-#   Eng_Gha (0.246): best — use as seed for cross-lingual
+# Strategy:
+#   - SKIP Stage 2 (back-translation) entirely — set all targets to 0.
+#   - Stage 3 (cross-lingual transfer) ONLY for Amh_Eth, Lug_Uga, Swa_Ken.
+#     These were your weakest languages in the eval AND the ones where
+#     volume is the binding constraint.
+#   - Stage 4 (LLM paraphrase) ONLY for the same 3 languages.
+#     Adds same-language lexical diversity to help ROUGE F1.
+#
+# Rationale for these specific volumes:
+#   - Each target ~ doubles the post-cleaning count for that language.
+#   - Above 2× original, translation noise risk grows faster than gains.
+#   - Conservative volumes also leave headroom: if the audit flags a
+#     language as FAIL, we can drop it from the merge without losing much.
 
-# Stage 2: back-translation targets (paraphrase question, keep answer)
-# Higher for languages with paraphrase-poor surface forms in training.
+# ─── Stage 2: skipped (all zeros means stage5_merge.py won't get a stage2 file) ─
+# The orchestrator won't even invoke Stage 2 if these are all 0; this block
+# is kept for compatibility with the stage scripts that read this config.
 backtranslation_targets:
-  Eng_Uga: 0        # English back-translation has limited value
+  Eng_Uga: 0
   Eng_Gha: 0
   Eng_Eth: 0
   Eng_Ken: 0
-  Aka_Gha: 800
-  Lug_Uga: 1200
-  Swa_Ken: 1000
-  Amh_Eth: 600
+  Aka_Gha: 0
+  Lug_Uga: 0
+  Swa_Ken: 0
+  Amh_Eth: 0
 
-# Stage 3: cross-lingual transfer (translate clean English → target language)
-# Heavily biased toward the languages that were broken/scarce in your eval.
+# ─── Stage 3: cross-lingual transfer (English → target lang) ────────────────
+# Source: cleanest English subset (Eng_Gha) — selected automatically by stage3.
+# Each line below: how many rows to generate for that target language.
+# 0 = skip this language for cross-lingual.
 crosslingual_targets:
-  Amh_Eth: 1500     # 462 rows → ~2000 total: biggest absolute volume boost
-  Lug_Uga: 1000     # 842 rows → ~1842 total
-  Swa_Ken:  800     # 511 rows → ~1311 total
-  Aka_Gha:  500     # 1084 rows → ~1584 total
+  Amh_Eth: 1500     # most impactful: was 462 rows → ~2000 total
+  Lug_Uga: 1000     # was 842 rows → ~1842 total
+  Swa_Ken:  800     # was 511 rows → ~1311 total
+  # Others explicitly zero — keeps the pipeline focused
+  Eng_Uga: 0
+  Eng_Gha: 0
+  Eng_Eth: 0
+  Eng_Ken: 0
+  Aka_Gha: 0
 
-# Stage 4: LLM paraphrase (rewrite answer in same language)
-# This adds the lexical diversity that helps ROUGE F1.
+# ─── Stage 4: same-language LLM paraphrase via Aya-Expanse-8B ───────────────
+# Generates paraphrased answers in the SAME language as the source row.
+# Targets only the 3 weak languages.
 paraphrase_targets:
-  Eng_Uga: 800      # 1674 rows of probably-noisy data → add high-quality variations
-  Eng_Gha: 500
-  Eng_Eth: 400
-  Eng_Ken: 500
-  Aka_Gha: 400
-  Lug_Uga: 400
-  Swa_Ken: 500
-  Amh_Eth: 300
+  Amh_Eth: 400      # smaller — Aya's Amharic quality is moderate, filter heavily
+  Lug_Uga: 500      # Aya handles Luganda reasonably
+  Swa_Ken: 600      # Swahili is Aya's strongest African language → can do more
+  # Others explicitly zero
+  Eng_Uga: 0
+  Eng_Gha: 0
+  Eng_Eth: 0
+  Eng_Ken: 0
+  Aka_Gha: 0

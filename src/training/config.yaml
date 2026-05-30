@@ -12,9 +12,11 @@ paths:
   reports: /workspace/Fin-tuning-RundPod/src/reports
   logs: /workspace/Fin-tuning-RundPod/src/logs
 
-# ── Dataset selection ──────────────────────────────────────────────────────
+# ─── Dataset selection ─────────────────────────────────────────────────────
+# v2: points at the augmented dataset from the pipeline output.
+# Pipeline writes: data/augmented/final_train.csv (cleaned + augmented rows)
 dataset:
-  train_file: data/cleaned/train_clean.csv
+  train_file: data/augmented/final_train.csv     # ← was data/cleaned/train_clean.csv
   val_file: data/cleaned/val_clean.csv
   test_file: data/raw/Test.csv
   id_col: ID
@@ -41,30 +43,23 @@ nllb_codes:
   Swa_Ken: swh_Latn
   Amh_Eth: amh_Ethi
 
-# ─── Model ─────────────────────────────────────────────────────────────────
-# mT0 is mT5 already instruction-tuned on xP3 (101 languages, 16 task families).
-# Same architecture as mT5 → all existing code works unchanged. Same tokenizer.
-#
-# A100 80GB sizing (LoRA, bf16):
-#   bigscience/mt0-large  (1.2B)  → weights ~2.4 GB, train batch 32 comfortable
-#   bigscience/mt0-xl     (3.7B)  → weights ~7.4 GB, train batch 16 comfortable ← default
-#   bigscience/mt0-xxl    (13B)   → needs QLoRA (load_in_4bit) at this size
+# ─── Model (unchanged from v1) ─────────────────────────────────────────────
 model:
   base_model: bigscience/mt0-xl
   max_input_length: 256
   max_output_length: 384
   load_in_8bit: false
-  use_fast_tokenizer: false        # SentencePiece — slow tokenizer is the safe path
-  block_sentinel_tokens: true       # mT0 inherits mT5's <extra_id_*> tokens
+  use_fast_tokenizer: false
+  block_sentinel_tokens: true
 
-# ─── LoRA ──────────────────────────────────────────────────────────────────
-# alpha = r  →  scale = alpha / r = 1.0 (stabler than 2.0 from the mT5 run).
-# Lower rank (32) is fine because mT0 is already instruction-tuned — we need
-# less plasticity than a from-scratch mT5 fine-tune.
+# ─── LoRA — v2 changes: rank 32 → 64, alpha kept equal to r (scale=1.0) ────
+# Reasoning: v1 grad norms were ~0.15, clip threshold never engaged. We have
+# room for more trainable parameters. r=64 doubles capacity from 73M to ~150M
+# trainable params — still tiny vs the 3.7B frozen base.
 lora:
   enabled: true
-  r: 64
-  lora_alpha: 64
+  r: 64                             # was 32
+  lora_alpha: 64                    # was 32 — kept equal to r (scale=1.0, stable)
   lora_dropout: 0.05
   target_modules:
   - q
@@ -77,57 +72,45 @@ lora:
   bias: none
   task_type: SEQ_2_SEQ_LM
 
-# ─── Optimiser ─────────────────────────────────────────────────────────────
-# Lower LR (1e-5) because mT0 is already in a good region of weight space.
-# Lower warmup (5%) for the same reason — long warmup is for cold starts.
-# Tighter grad clip (0.5) is a belt-and-braces guard given the bf16 history.
+# ─── Optimiser — v2 changes: LR 1e-5 → 3e-5, clip 0.5 → 1.0 ────────────────
+# Reasoning: v1 grad norms stayed 0.1–0.3 throughout training — well below
+# the clip threshold of 0.5. The optimizer was barely moving weights. 3× LR
+# is reasonable and the relaxed clip lets natural larger steps through.
 optimiser:
   type: adamw_torch
-  lr: 3.0e-5
+  lr: 3.0e-5                        # was 1.0e-5 (3× higher)
   weight_decay: 0.01
   lr_scheduler: cosine
   warmup_ratio: 0.05
   label_smoothing: 0.0
-  max_grad_norm: 1.0
+  max_grad_norm: 1.0                # was 0.5 (now that bf16 is proven stable)
 
-# ─── Training ──────────────────────────────────────────────────────────────
-# Batch sizing for mT0-XL on A100 80GB:
-#   train batch 16 × accum 4 = effective 64 — fits with healthy headroom.
-#   The OOM-retry loop in train.py will auto-halve and double accum if needed.
-#
-# epochs: 3 — mT0 typically converges 2–3× faster than mT5 on QA.
-# eval_steps / save_steps: 500 — frequent enough to recover from OOM cheaply,
-#   not so frequent that we burn hours on eval.
-# eval_max_samples: 800 — stratified subsample during training eval, full eval
-#   at the end of each phase. Saves ~5x on eval time.
-# generation_num_beams: 1 (greedy) during training; final beam search runs
-#   from src/scripts/eval.py separately on the full val set.
+# ─── Training — v2 changes: 3 → 5 epochs, batch 16 → 12, eval_loss selection ─
 training:
-  epochs: 3
-  output_dir_suffix: mt0_xl_a100
-  early_stopping_patience: 2
+  epochs: 8                         # was 3 — loss was still decreasing at end of v1
+  output_dir_suffix: mt0_xl_a100_v2 # ← separate dir from v1
+  early_stopping_patience: 3        # was 2 — let the model explore longer
 
   # Auto batch sizing (initial, pre-OOM)
+  # v2 batch 12 — matches the size that survived OOM in v1; faster startup,
+  # avoids the first OOM retry that costs ~2 min on attempt 1.
   auto_batch_size: true
-  target_effective_batch: 64
-  per_device_train_batch: 16
-  per_device_eval_batch: 32
-  gradient_accumulation: 4
+  target_effective_batch: 72        # was 64 — slight bump with the larger batch
+  per_device_train_batch: 12        # was 16 (will retry-shrink if OOM)
+  per_device_eval_batch: 24
+  gradient_accumulation: 6          # keeps effective batch = 12 × 6 = 72
 
-  # Bounds the OOM retry loop respects
+  # OOM retry bounds — unchanged
   min_batch_size: 1
   min_per_device_train_batch: 1
-  max_per_device_train_batch: 32
+  max_per_device_train_batch: 24
   min_per_device_eval_batch: 1
-  max_per_device_eval_batch: 64
+  max_per_device_eval_batch: 48
   eval_batch_multiplier: 2.0
-
-  # Native HF auto_find_batch_size as a second line of defence (in addition
-  # to our outer retry). Set to false if it conflicts with custom OOM logic.
   auto_find_batch_size: false
 
   mixed_precision: bf16
-  gradient_checkpointing: false     # plenty of VRAM for mT0-XL with LoRA
+  gradient_checkpointing: false
   dataloader_num_workers: 8
   dataloader_prefetch_factor: 2
   logging_steps: 25
@@ -139,29 +122,31 @@ training:
   save_total_limit: 3
   save_safetensors: true
   predict_with_generate: true
-  generation_num_beams: 1           # greedy during training — fast
+  generation_num_beams: 1
   load_best_model_at_end: true
-  metric_for_best_model: rougeL
-  greater_is_better: true
-  resume_from_checkpoint: auto      # picks up last checkpoint if it exists
 
-  # NEW: cap eval set size during training to keep eval fast.
-  # Set to 0 to disable subsampling and eval on the full val set.
+  # v2 change: select best checkpoint by EVAL LOSS, not ROUGE.
+  # Reasoning: training-time ROUGE uses greedy decoding on an 800-sample
+  # subset — noisy signal. Eval loss is computed on the full eval batch
+  # and is more stable. Final beam-search ROUGE is measured separately by
+  # eval_full.py after training.
+  metric_for_best_model: eval_loss  # was rougeL
+  greater_is_better: false          # was true (loss = lower is better)
+
+  resume_from_checkpoint: auto
   eval_max_samples: 800
 
-# ─── Curriculum (disabled by default for mT0) ──────────────────────────────
-# mT0 already speaks all these languages. The cross-language pre-finetune
-# from a curriculum is less useful than for raw mT5.
+# ─── Curriculum (disabled, same as v1) ─────────────────────────────────────
 curriculum:
   enabled: false
-  phase1_epochs: 3
-  phase2_epochs: 5
+  phase1_epochs: 0
+  phase2_epochs: 8                  # match epochs above
   phase1_langs:
   - Eng_Uga
   - Aka_Gha
   - Eng_Gha
 
-# ─── Back-translation / NLLB (unchanged) ───────────────────────────────────
+# ─── Translation / augmentation config (kept for reference) ────────────────
 translation:
   model_name: facebook/nllb-200-1.3B
   num_beams: 2
@@ -170,7 +155,6 @@ translation:
 
 augmentation:
   target_ratio:
-    Eng_Uga: 1.0
     Eng_Uga: 1.0
     Aka_Gha: 1.7
     Eng_Gha: 1.7
@@ -181,9 +165,9 @@ augmentation:
     Amh_Eth: 4.0
   chrf_threshold: 0.10
   chrf_threshold_per_lang:
-    Aka_Gha: 0.20
-    Lug_Uga: 0.15
-    Swa_Ken: 0.10
+    Aka_Gha: 0.10
+    Lug_Uga: 0.10
+    Swa_Ken: 0.05
     Amh_Eth: 0.0005
   semantic_cos_threshold: 0.3
   length_ratio_min: 0.5
@@ -207,10 +191,9 @@ quality_gate:
 
 temperature_sampling:
   enabled: true
-  enabled: true
   temperature: 5.0
 
-# ─── Decoding (final-eval / submission) ────────────────────────────────────
+# ─── Decoding (final-eval / submission) — unchanged from v1 ────────────────
 decoding:
   default:
     num_beams: 8
@@ -219,36 +202,11 @@ decoding:
     repetition_penalty: 1.2
     min_length: 10
   per_language:
-    Aka_Gha:
-      num_beams: 6
-      length_penalty: 1.0
-      num_beams: 6
-      length_penalty: 1.0
-      no_repeat_ngram: 3
-    Amh_Eth:
-      num_beams: 8
-      length_penalty: 0.8
-      num_beams: 8
-      length_penalty: 0.8
-      no_repeat_ngram: 2
-    Lug_Uga:
-      num_beams: 6
-      length_penalty: 1.0
-      num_beams: 6
-      length_penalty: 1.0
-      no_repeat_ngram: 3
-    Swa_Ken:
-      num_beams: 8
-      length_penalty: 0.8
-      num_beams: 8
-      length_penalty: 0.8
-      no_repeat_ngram: 3
-    Eng_Uga:
-      num_beams: 8
-      length_penalty: 0.6
-      num_beams: 8
-      length_penalty: 0.6
-      no_repeat_ngram: 4
+    Aka_Gha: { num_beams: 6, length_penalty: 1.0, no_repeat_ngram: 3 }
+    Amh_Eth: { num_beams: 8, length_penalty: 0.8, no_repeat_ngram: 2 }
+    Lug_Uga: { num_beams: 6, length_penalty: 1.0, no_repeat_ngram: 3 }
+    Swa_Ken: { num_beams: 8, length_penalty: 0.8, no_repeat_ngram: 3 }
+    Eng_Uga: { num_beams: 8, length_penalty: 0.6, no_repeat_ngram: 4 }
 
 evaluation:
   dump_predictions: true
@@ -266,11 +224,9 @@ evaluation:
 tracking:
   backend: none
   experiment: african-health-qa
-  run_name: mt0-xl-a100-80gb-bf16-lora-v1
+  run_name: mt0-xl-a100-80gb-bf16-lora-v2
 
 serving:
-  host: 0.0.0.0
-  port: 8000
   host: 0.0.0.0
   port: 8000
   disclaimer:

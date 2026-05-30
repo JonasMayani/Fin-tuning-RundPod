@@ -1,31 +1,42 @@
-# clean_config.yaml — controls Stage 1 cleaning thresholds.
+# clean_config.yaml v2 — relaxed thresholds based on hand inspection.
 #
-# These defaults reflect what we learned from your rouge_by_language.csv:
-#   - Amh_Eth scored 0.036 (broken) → enforce script AND langid strictly
-#   - English subsets scored low → enforce coherence threshold strictly
-#   - African-language subsets → more lenient on langid (fastText unreliable)
+# v1 dropped 56% of rows because LaBSE Q↔A cosine thresholds were too strict.
+# Hand inspection confirmed that rows with cosine 0.20-0.40 are mostly real
+# medical Q&A pairs — LaBSE just rates them low because the Q phrasing
+# (mechanism) and A phrasing (biology) differ even when the pair is valid.
+#
+# This v2 config:
+#   - Keeps script/langid filters (catch real noise in ~500 rows)
+#   - Keeps length / repetition / near-dup filters (catch obvious bad rows)
+#   - Drops the qa_cos floor much lower (only catches truly unrelated pairs)
+#
+# Expected outcome: ~26,000-27,000 rows kept (vs 12,808 with v1 thresholds)
 
 min_q_tokens: 3
 min_a_tokens: 5
 max_a_tokens: 400
-max_repetition_ratio: 0.4
-near_dup_threshold: 0.85
+max_repetition_ratio: 0.5         # was 0.4 — slightly more lenient
+near_dup_threshold: 0.88          # was 0.85 — only drop obvious duplicates
 
 per_language:
-  # Most aggressive: Amharic had near-zero ROUGE; many rows likely in wrong script
+  # Amharic: keep strict script + langid (these caught real noise)
+  # but lower qa_cos floor — cross-script Q&A scores low on LaBSE anyway
   Amh_Eth:
-    qa_cos_min: 0.30           # demand stronger Q↔A coherence
-    require_script_ok: true    # must be in Ethiopic script
-    require_lang_ok: true      # fastText confirms 'am'
+    qa_cos_min: 0.10
+    require_script_ok: true       # script filter caught 6 real bad rows, keep it
+    require_lang_ok: true         # fastText is reliable on Amharic (Ethiopic script)
 
-  # English partitions scored unexpectedly low → enforce coherence strictly
-  Eng_Uga: { qa_cos_min: 0.50, require_script_ok: true, require_lang_ok: true }
-  Eng_Ken: { qa_cos_min: 0.50, require_script_ok: true, require_lang_ok: true }
-  Eng_Gha: { qa_cos_min: 0.45, require_script_ok: true, require_lang_ok: true }
-  Eng_Eth: { qa_cos_min: 0.45, require_script_ok: true, require_lang_ok: true }
+  # English partitions: low floor — hand inspection showed most low-cos rows are fine
+  Eng_Uga: { qa_cos_min: 0.15, require_script_ok: true, require_lang_ok: false }
+  Eng_Ken: { qa_cos_min: 0.15, require_script_ok: true, require_lang_ok: false }
+  Eng_Gha: { qa_cos_min: 0.15, require_script_ok: true, require_lang_ok: false }
+  Eng_Eth: { qa_cos_min: 0.15, require_script_ok: true, require_lang_ok: false }
 
-  # African languages with smaller datasets: lenient to avoid losing data,
-  # but still drop the worst Q↔A mismatches.
-  Aka_Gha: { qa_cos_min: 0.30, require_script_ok: true,  require_lang_ok: false }
-  Lug_Uga: { qa_cos_min: 0.30, require_script_ok: true,  require_lang_ok: false }
-  Swa_Ken: { qa_cos_min: 0.35, require_script_ok: true,  require_lang_ok: true }
+  # African languages: even lower floor — fewer training examples, don't decimate
+  # fastText langid disabled (unreliable on short Akan/Luganda text)
+  Aka_Gha: { qa_cos_min: 0.10, require_script_ok: true, require_lang_ok: false }
+  Lug_Uga: { qa_cos_min: 0.10, require_script_ok: true, require_lang_ok: false }
+
+  # Swahili: removed the langid requirement (dropped 440 rows in v1).
+  # fastText confuses Swahili with Sheng / borrowed-English-heavy Swahili.
+  Swa_Ken: { qa_cos_min: 0.10, require_script_ok: true, require_lang_ok: false }
