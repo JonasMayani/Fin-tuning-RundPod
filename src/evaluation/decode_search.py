@@ -36,9 +36,9 @@ from src.training.train import build_prompt
 
 # Search space
 BEAM_SIZES      = [4, 6, 8, 12]
-LENGTH_PENALTIES = [0.6, 0.8, 1.0, 1.2]
-NO_REPEAT_NGRAMS = [2, 3, 4]
-
+LENGTH_PENALTIES = [0.8, 1.2, 1.8, 2.5]
+NO_REPEAT_NGRAMS = [3, 4]
+MIN_NEW_TOKENS   = [30, 40, 60, 70]
 
 def decode_batch(
     model,
@@ -49,6 +49,7 @@ def decode_batch(
     num_beams:        int,
     length_penalty:   float,
     no_repeat_ngram:  int,
+    min_new_tokens:   int,
 ) -> list[str]:
     """Generate predictions for a batch with given decode config."""
     inputs = tokenizer(
@@ -122,7 +123,7 @@ def run_decode_search(config_path: str = "src/training/config.yaml") -> None:
         best_score  = -1.0
         best_config = {}
 
-        grid = list(itertools.product(BEAM_SIZES, LENGTH_PENALTIES, NO_REPEAT_NGRAMS))
+        grid = list(itertools.product(BEAM_SIZES, LENGTH_PENALTIES, NO_REPEAT_NGRAMS, MIN_NEW_TOKENS))
         for nb, lp, nrn in tqdm(grid, desc=lang):
             preds = decode_batch(
                 model, tokenizer, prompts,

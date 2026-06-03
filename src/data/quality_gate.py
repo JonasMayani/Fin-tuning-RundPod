@@ -193,8 +193,9 @@ def run_quality_gate(config_path: str = "src/training/config.yaml") -> None:
     with open(config_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
-    paths   = cfg["paths"]
-    aug_cfg = cfg["augmentation"]
+    paths       = cfg["paths"]
+    aug_cfg     = cfg["augmentation"]
+    quality_cfg = cfg["quality_gate"]
 
     augmented_dir = Path(paths["data_augmented"])
     reports_dir   = Path(paths["reports"])
@@ -252,7 +253,7 @@ def run_quality_gate(config_path: str = "src/training/config.yaml") -> None:
     df = df[g3].copy()
 
     # Gate 4: Semantic relevance
-    g4 = gate_semantic_relevance(df, threshold=aug_cfg["semantic_cos_threshold"])
+    g4 = gate_semantic_relevance(df, threshold=quality_cfg["semantic_cos_threshold"])
     record("semantic_relevance", g4)
     df = df[g4].copy()
 

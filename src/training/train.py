@@ -63,7 +63,12 @@ from transformers.trainer_utils import get_last_checkpoint
 if torch.cuda.is_available():
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message=r".*length_penalty.*beam-based generation.*",
+    category=UserWarning,
+)
 LANGUAGE_NAMES: dict[str, str] = {
     "Eng_Uga": "English", "Aka_Gha": "Akan",   "Eng_Gha": "English",
     "Eng_Eth": "English", "Lug_Uga": "Luganda", "Eng_Ken": "English",

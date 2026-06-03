@@ -367,7 +367,8 @@ def forward_translate(
     num_beams  = nllb_cfg["num_beams"]
     batch_size = nllb_cfg["batch_size"]
     max_length = nllb_cfg["max_length"]
-    chrf_thr   = cfg["augmentation"]["chrf_threshold"]
+    chrf_global = cfg["augmentation"]["chrf_threshold"]
+    chrf_map    = cfg["augmentation"].get("chrf_threshold_per_lang", {})
 
     # Build target language list: only non-English subsets
     non_english_targets = {
@@ -411,6 +412,7 @@ def forward_translate(
         )
 
         # Quality filter: chrF of translated input vs original English input
+        chrf_thr    = chrf_map.get(subset_tag, chrf_global)
         chrf_scores = compute_chrf(translated_inputs, inputs_en)
 
         rows = []

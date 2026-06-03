@@ -12,11 +12,11 @@ paths:
   reports: /workspace/Fin-tuning-RundPod/src/reports
   logs: /workspace/Fin-tuning-RundPod/src/logs
 
-# ─── Dataset selection ─────────────────────────────────────────────────────
-# v2: points at the augmented dataset from the pipeline output.
-# Pipeline writes: data/augmented/final_train.csv (cleaned + augmented rows)
+# ─── Dataset ───────────────────────────────────────────────────────────────
+# Augmented data WITH the prefix kept in — empirically stripping it lowers
+# ROUGE because the references contain it too.
 dataset:
-  train_file: data/augmented/final_train.csv     # ← was data/cleaned/train_clean.csv
+  train_file: data/augmented/final_train_v2.csv
   val_file: data/cleaned/val_clean.csv
   test_file: data/raw/Test.csv
   id_col: ID
@@ -43,7 +43,7 @@ nllb_codes:
   Swa_Ken: swh_Latn
   Amh_Eth: amh_Ethi
 
-# ─── Model (unchanged from v1) ─────────────────────────────────────────────
+# ─── Model ─────────────────────────────────────────────────────────────────
 model:
   base_model: bigscience/mt0-xl
   max_input_length: 256
@@ -52,15 +52,12 @@ model:
   use_fast_tokenizer: false
   block_sentinel_tokens: true
 
-# ─── LoRA — v2 changes: rank 32 → 64, alpha kept equal to r (scale=1.0) ────
-# Reasoning: v1 grad norms were ~0.15, clip threshold never engaged. We have
-# room for more trainable parameters. r=64 doubles capacity from 73M to ~150M
-# trainable params — still tiny vs the 3.7B frozen base.
+# ─── LoRA — v3: r=128 (283M trainable params, ~7% of 4B model) ─────────────
 lora:
   enabled: true
-  r: 64                             # was 32
-  lora_alpha: 64                    # was 32 — kept equal to r (scale=1.0, stable)
-  lora_dropout: 0.05
+  r: 128
+  lora_alpha: 128                 # = r (scale 1.0)
+  lora_dropout: 0.1               # higher than v2's 0.05 to regularize the bigger adapter
   target_modules:
   - q
   - k
@@ -72,40 +69,39 @@ lora:
   bias: none
   task_type: SEQ_2_SEQ_LM
 
-# ─── Optimiser — v2 changes: LR 1e-5 → 3e-5, clip 0.5 → 1.0 ────────────────
-# Reasoning: v1 grad norms stayed 0.1–0.3 throughout training — well below
-# the clip threshold of 0.5. The optimizer was barely moving weights. 3× LR
-# is reasonable and the relaxed clip lets natural larger steps through.
+# ─── Optimiser — v3: LR 5e-5 (up from 3e-5) ────────────────────────────────
 optimiser:
   type: adamw_torch
-  lr: 3.0e-5                        # was 1.0e-5 (3× higher)
+  lr: 5.0e-5
   weight_decay: 0.01
   lr_scheduler: cosine
   warmup_ratio: 0.05
   label_smoothing: 0.0
-  max_grad_norm: 1.0                # was 0.5 (now that bf16 is proven stable)
+  max_grad_norm: 1.0              # correctly clips the occasional spike to 4+
 
-# ─── Training — v2 changes: 3 → 5 epochs, batch 16 → 12, eval_loss selection ─
+# ─── Training — v3: batch 6 from the start (THE KEY FIX) ───────────────────
+# In the previous v3 run, auto_batch_size picked 24, which OOM'd twice
+# (24→12→6) before stabilizing at 6, wasting ~22 min on cold restarts.
+# The r=128 model only fits at batch 6 on A100 80GB, so we start there
+# directly and disable auto-sizing. Effective batch stays 72 (6 × 12).
 training:
-  epochs: 8                         # was 3 — loss was still decreasing at end of v1
-  output_dir_suffix: mt0_xl_a100_v2 # ← separate dir from v1
-  early_stopping_patience: 3        # was 2 — let the model explore longer
+  epochs: 8
+  output_dir_suffix: mt0_xl_a100_v3
+  early_stopping_patience: 3
 
-  # Auto batch sizing (initial, pre-OOM)
-  # v2 batch 12 — matches the size that survived OOM in v1; faster startup,
-  # avoids the first OOM retry that costs ~2 min on attempt 1.
-  auto_batch_size: true
-  target_effective_batch: 72        # was 64 — slight bump with the larger batch
-  per_device_train_batch: 12        # was 16 (will retry-shrink if OOM)
-  per_device_eval_batch: 24
-  gradient_accumulation: 6          # keeps effective batch = 12 × 6 = 72
+  # FIXED: start at the size that actually fits, skip the OOM dance
+  auto_batch_size: false          # was true — it picked 24 and OOM'd
+  target_effective_batch: 72
+  per_device_train_batch: 8       # was 24 → fits r=128 directly
+  per_device_eval_batch: 12       # was 48 → eval also needs to be smaller
+  gradient_accumulation: 12       # 6 × 12 = effective batch 72
 
-  # OOM retry bounds — unchanged
+  # OOM retry bounds (kept as a safety net even though we start small)
   min_batch_size: 1
   min_per_device_train_batch: 1
-  max_per_device_train_batch: 24
+  max_per_device_train_batch: 12
   min_per_device_eval_batch: 1
-  max_per_device_eval_batch: 48
+  max_per_device_eval_batch: 24
   eval_batch_multiplier: 2.0
   auto_find_batch_size: false
 
@@ -122,31 +118,22 @@ training:
   save_total_limit: 3
   save_safetensors: true
   predict_with_generate: true
-  generation_num_beams: 1
+  generation_num_beams: 1         # greedy during training eval (fast)
   load_best_model_at_end: true
-
-  # v2 change: select best checkpoint by EVAL LOSS, not ROUGE.
-  # Reasoning: training-time ROUGE uses greedy decoding on an 800-sample
-  # subset — noisy signal. Eval loss is computed on the full eval batch
-  # and is more stable. Final beam-search ROUGE is measured separately by
-  # eval_full.py after training.
-  metric_for_best_model: eval_loss  # was rougeL
-  greater_is_better: false          # was true (loss = lower is better)
-
+  metric_for_best_model: eval_loss
+  greater_is_better: false
   resume_from_checkpoint: auto
   eval_max_samples: 800
 
-# ─── Curriculum (disabled, same as v1) ─────────────────────────────────────
 curriculum:
   enabled: false
   phase1_epochs: 0
-  phase2_epochs: 8                  # match epochs above
+  phase2_epochs: 8
   phase1_langs:
   - Eng_Uga
   - Aka_Gha
   - Eng_Gha
 
-# ─── Translation / augmentation config (kept for reference) ────────────────
 translation:
   model_name: facebook/nllb-200-1.3B
   num_beams: 2
@@ -163,12 +150,12 @@ augmentation:
     Eng_Ken: 3.0
     Swa_Ken: 3.0
     Amh_Eth: 4.0
-  chrf_threshold: 0.10
+  chrf_threshold: 0.15
   chrf_threshold_per_lang:
-    Aka_Gha: 0.10
-    Lug_Uga: 0.10
-    Swa_Ken: 0.05
-    Amh_Eth: 0.0005
+    Aka_Gha: 0.18
+    Lug_Uga: 0.18
+    Swa_Ken: 0.15
+    Amh_Eth: 0.005
   semantic_cos_threshold: 0.3
   length_ratio_min: 0.5
   length_ratio_max: 20.0
@@ -193,20 +180,27 @@ temperature_sampling:
   enabled: true
   temperature: 5.0
 
-# ─── Decoding (final-eval / submission) — unchanged from v1 ────────────────
+# ─── Decoding (final-eval / submission) ────────────────────────────────────
+# length_penalty 1.5 + min_length 40 address the "predictions too short"
+# problem found in v2 prediction inspection. These only apply at final
+# beam-search eval; training-time eval is greedy (hence the harmless
+# length_penalty warning, now silenced in train.py).
 decoding:
   default:
     num_beams: 8
-    length_penalty: 0.8
-    no_repeat_ngram: 4
+    length_penalty: 1.5
+    no_repeat_ngram: 3
     repetition_penalty: 1.2
-    min_length: 10
+    min_length: 50
   per_language:
-    Aka_Gha: { num_beams: 6, length_penalty: 1.0, no_repeat_ngram: 3 }
-    Amh_Eth: { num_beams: 8, length_penalty: 0.8, no_repeat_ngram: 2 }
-    Lug_Uga: { num_beams: 6, length_penalty: 1.0, no_repeat_ngram: 3 }
-    Swa_Ken: { num_beams: 8, length_penalty: 0.8, no_repeat_ngram: 3 }
-    Eng_Uga: { num_beams: 8, length_penalty: 0.6, no_repeat_ngram: 4 }
+    Aka_Gha: { num_beams: 6, length_penalty: 1.5, no_repeat_ngram: 3, repetition_penalty: 1.2, min_length: 50 }
+    Amh_Eth: { num_beams: 8, length_penalty: 1.5, no_repeat_ngram: 3, repetition_penalty: 1.2, min_length: 50 }
+    Lug_Uga: { num_beams: 6, length_penalty: 1.5, no_repeat_ngram: 3, repetition_penalty: 1.2, min_length: 50 }
+    Swa_Ken: { num_beams: 8, length_penalty: 1.5, no_repeat_ngram: 3, repetition_penalty: 1.2, min_length: 50 }
+    Eng_Uga: { num_beams: 8, length_penalty: 1.5, no_repeat_ngram: 3, repetition_penalty: 1.2, min_length: 50 }
+    Eng_Ken: { num_beams: 8, length_penalty: 1.5, no_repeat_ngram: 3, repetition_penalty: 1.2, min_length: 50 }
+    Eng_Gha: { num_beams: 8, length_penalty: 1.5, no_repeat_ngram: 3, repetition_penalty: 1.2, min_length: 40 }
+    Eng_Eth: { num_beams: 8, length_penalty: 1.5, no_repeat_ngram: 3, repetition_penalty: 1.2, min_length: 40 }
 
 evaluation:
   dump_predictions: true
@@ -224,7 +218,7 @@ evaluation:
 tracking:
   backend: none
   experiment: african-health-qa
-  run_name: mt0-xl-a100-80gb-bf16-lora-v2
+  run_name: mt0-xl-a100-80gb-bf16-lora-v3
 
 serving:
   host: 0.0.0.0
