@@ -35,10 +35,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.training.train import build_prompt
 
 # Search space
-BEAM_SIZES      = [4, 6, 8, 12]
-LENGTH_PENALTIES = [0.8, 1.2, 1.8, 2.5]
-NO_REPEAT_NGRAMS = [3, 4]
-MIN_NEW_TOKENS   = [30, 40, 60, 70]
+BEAM_SIZES      = [8]
+LENGTH_PENALTIES = [0.6, 1.5, 2.5]
+NO_REPEAT_NGRAMS = [3]
+MIN_NEW_TOKENS   = [30, 70]
+SAMPLE_PER_LANG  = 100
 
 def decode_batch(
     model,
