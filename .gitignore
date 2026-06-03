@@ -1,0 +1,13 @@
+# Ignore large generated data and checkpoints
+/data/
+/data
+src/models/checkpoints/
+src/models/checkpoints
+reports/
+reports
+*.safetensors
+*.pt
+*.pth
+*.npz
+*.ckpt
+*.cache
